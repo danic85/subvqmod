@@ -10,3 +10,7 @@ The script finds a unique 'find' anchor point for each change using the patch fi
 All my software is open source, please donate to help keep it free http://dannicholson.co.uk/donate
 
 (4 Feb 2014) This software is in alpha release, please report any issues.
+
+KNOWN ISSUES:
+- When a REPLACE operation requires an offset for a unique anchor, the offset does not account for the other lines. This means that the lines between the anchor and the new content are deleted.
+- Can't handle multiple replaces in one patch operation
