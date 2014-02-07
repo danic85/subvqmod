@@ -5,14 +5,16 @@ require_once('SubVQModGenerator.php');
 // Location of patch file to be parsed.
 define ( 'PATCH_LOCATION', 'patch/patch.patch' );
 // Location of source code that will be changed by patch
-define ( 'ORIGINAL_LOCATION', 'original/' );
+define ( 'ORIGINAL_LOCATION', '../opencart/' );
 
 try
 {
 	// Create new SubVQMod Generator
 	$gen = new SubVQModGenerator();
+	
+	$gen->parsePatches('patch');
 	// Parse SVN patch file
-	$gen->parsePatch(PATCH_LOCATION);
+//	$gen->parsePatch(PATCH_LOCATION);
 	// Generate VQMod XML file
 	$ok = $gen->generateVQModXML();
 	
