@@ -1,7 +1,8 @@
 subvqmod
 ========
 
-Create VQMod XML files from a Subversion patch file.
+Create VQMod XML files from a Subversion patch file. This branch handles multiple patch files from a specified folder.
+The class has been rewritten to better handle complex operations, but does not yet mitigate issue #1 or #2.
 
 This script is written in PHP and, when provided with a valid Subversion patch file, parses the contents and translates it into a VQMod XML change file.
 
