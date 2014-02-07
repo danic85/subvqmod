@@ -12,14 +12,12 @@ require_once('SimpleXMLExtended.php');
 class SubVQModGenerator extends stdClass
 {
 	private $patchArray;
-	private $patchSource;
 	private $outputName;
 	private $xml;
 	private $fails;
 	public function __construct($output = "output.xml")
 	{
 		$this->patchArray = array();
-		$this->patchSource = NULL;
 		$this->fails = array();
 		$this->outputName = $output;
 	}
@@ -106,7 +104,9 @@ class SubVQModGenerator extends stdClass
 	 */
 	private function _addOperation($operation, $ref)
 	{
-		if (!isset($operation['find'])) throw new Exception("Find operation is not defined");
+		if (!isset($operation['anchor'])) throw new Exception("Find operation is not defined");
+		
+		
 		$op = $ref->addChild('operation');
 		//$op->addAttribute('name', $path);
 		$op->addAttribute('error', 'abort');
@@ -114,16 +114,65 @@ class SubVQModGenerator extends stdClass
 
 		// Add search element
 		$search = $op->addChild('search');
-		$search->addCData($operation['find']);
+		
+		//@todo make this work with complex operations
+		
+		$start = $operation['anchor'] - ($operation['start']-1);
+		$offset = abs(($start+1) - $operation['change'][0]['line']);
+		if ($operation['method'] == 'replace') $offset--;
+		$add = array();
+		$remove = array();
+		foreach($operation['lines'] as $line => $l)
+		{
+			$found = false;
+			foreach($operation['change'] as $change)
+			{
+				if ($change['operation'] == '-' && $change['line'] == $line)
+				{
+					$remove[] = $operation['lines'][$line];
+					$found = true;
+				}
+				else if ($change['operation'] == '+' && $change['line'] == $line)
+				{
+					$add[] = $operation['lines'][$line];
+					$found = true;
+				}
+				if ($found) break;
+			}
+			if (!$found && $offset && $operation['method'] == 'replace' && $start == 0) $add[] = $operation['lines'][$line];
+				
+		}
+		if (sizeof($remove) > 1) $this->fails[] = $operation;
+		$offset += sizeof($remove)-1;
+		//var_dump($add);
+				
+		$search->addCData(trim($operation['lines'][($start < 0 ? 0 : $start)]));
 		$search->addAttribute('position', $operation['method']);
-
-		if (isset($operation['offset']) && $operation['offset']) $search->addAttribute('offset', abs($operation['offset']));
-
+		
+		if (sizeof($operation['change']) > 0)
+		{
+			if ($offset) $search->addAttribute('offset', $offset);
+		}
+		
 		$search = $op->addChild('add');
-		$search->addCData(implode("\n",$operation['add']));
-
-		//var_dump($operation);
+		$search->addCData(implode("\n", $add));
+		
 		return $op;
+	}
+	
+	public function parsePatches($folder)
+	{
+		if ($handle = opendir($folder)) 
+		{
+			while (false !== ($filename = readdir($handle))) {
+				if (strpos($filename, '.patch') !== FALSE)	{
+					$this->parsePatch($folder.'/'.$filename);
+				}
+			}
+			closedir($handle);
+		}
+		return true;
+		//var_dump($this->patchArray);
 	}
 
 	/**
@@ -134,185 +183,140 @@ class SubVQModGenerator extends stdClass
 	public function parsePatch($filename) {
 
 		$handle = @fopen ($filename, "r" );
-		$contents = array ();
-		$fnme = '';
+		$ops = array();
+		$opcnt = 0;
 		if ($handle) {
+			// Get patch file one line at a time
 			while ( ($file = fgets ( $handle, 4096 )) !== false ) {
-				if (strpos ( $file, 'Index: ' ) !== FALSE) {
+				// Get name of file operations will be carried out on
+				if (strpos ( $file, 'Index: ' ) === 0) {
 					$fnme = trim ( str_replace ( 'Index: ', '', $file ) );
 					continue;
 				}
-				$contents [$fnme] [] = $file;
-			}
-			if (! feof ( $handle )) {
-				echo "Error: unexpected fgets() fail\n";
-			}
-			$this->patchSource = $contents;
-			fclose ( $handle );
-			$files = array ();
-			$opcount = 0;
-			foreach ( $contents as $fname => $file ) {
-				for($i = 0; $i < sizeof ( $file ); $i ++) {
-					// Ignore this and the next two lines
-					if (strpos ( $file [$i], '===============' ) === 0) {
-						$i += 2; // skip two lines
-						continue;
-					}
-					// Trigger new operation
-					if (strpos ( $file [$i], '@@ ' ) === 0) {
-
-						$opcount ++;
-						$files [$fname] [$opcount] ['lnum'] = abs((int)substr($file[$i],3,strpos($file[$i],',')-3));
-						continue;
-					}
-					// Add line to operation array
-					$files [$fname] [$opcount] ['lines'] [] = trim ( $file [$i] );
+				// Ignore useless lines
+				if (strpos($file, '====') === 0 || strpos($file, '---') === 0 || strpos($file, '+++') === 0) {
+					continue;
 				}
+				if (strpos ( $file, '@@' ) === 0) {
+					$opcnt++;
+					$ops[$fnme][$opcnt]['start'] = abs((int)substr($file,3,strpos($file,',')-3));
+					continue;
+				}
+				//substr($lines[$line],1));
+				
+				
+				if (strpos ( $file, '+' ) === 0) {
+					$ops[$fnme][$opcnt]['change'][] = array('operation' => '+', 'line' => sizeof($ops[$fnme][$opcnt]['lines']));
+					$ops[$fnme][$opcnt]['lines'][] = rtrim(substr($file,1));
+				}
+				else if (strpos ( $file, '-' ) === 0) {
+					$ops[$fnme][$opcnt]['change'][] = array('operation' => '-', 'line' => sizeof($ops[$fnme][$opcnt]['lines']));
+					$ops[$fnme][$opcnt]['lines'][] = rtrim(substr($file,1));
+				}
+				else $ops[$fnme][$opcnt]['lines'][] = rtrim($file);
+				
 			}
-
-			foreach ( $files as $fname => $file ) {
-				// For each operation, work out find string and replace line(s). Also work out method (replace / after).
-				foreach ( $file as $opid => $op ) {
-					foreach ( $op ['lines'] as $opline => $line ) {
-						// Found replacement / new line
-						if ($pos = strpos ( $line, '+' ) === 0) {
-							if (! isset ( $files [$fname] [$opid] ['find'] )) {
-								if (isset ( $op ['lines'] [$opline - 1] )) {
-									$files [$fname] [$opid] = $this->_getFind($fname, $op['lines'], $opline-1, $op['lnum']);
-									if (!$files [$fname] [$opid])
-									{
-										unset($files [$fname] [$opid]);
-										$this->fails[$fname][$opid] = $op;
-										continue;
-									}
-									$files [$fname] [$opid]['offset'] -= ($opline-1);
-									// If line before is '-' in patch, mark as replacement rather than 'after'.
-									if(strpos($op['lines'][$opline-1], '-') === 0) $files [$fname] [$opid]['method'] = 'replace';
-
-
-								}
-							}
-							$ln = substr ( $line, 1 );
-							if ($files [$fname] [$opid] ['method'] == 'replace')
-								$ln = trim ( $ln );
-							$files [$fname] [$opid] ['add'] [] = $ln;
-
+			$this->_parseOperations($ops);
+			if (! feof ( $handle )) {
+				throw new exception("Error: unexpected fgets() fail");
+			}
+			fclose ( $handle );
+		}
+		return true;
+	}
+	private function _parseOperations($files)
+	{
+		foreach($files as $fname => $ops)
+		{
+			$contents = @file_get_contents(ORIGINAL_LOCATION . $fname);
+			if ($contents === FALSE) throw new Exception("Unable to open original file for _getFind(): " . ORIGINAL_LOCATION . $fname);
+			$lines = explode("\n",$contents);
+			
+			foreach($ops as $opid => $op)
+			{
+				$files[$fname][$opid]['method'] = 'after';
+				
+				// Set start pos (position of first element (-1 for array find)
+				$s = $op['start']-1;
+				// Incorporate line of first change
+				if (sizeof($op['change']) > 0) $s += ($op['change'][0]['operation'] == '-' ? $op['change'][0]['line'] : $op['change'][0]['line']-1); //@todo if add, start with line before.
+				
+				for($i = $s; $i > 0; $i--)
+				{
+					if (!trim($lines[$i])) continue;
+					$cnt = substr_count($contents, trim($lines[$i]));
+					if ($cnt == 1)
+					{
+						$files[$fname][$opid]['anchor'] = $i;
+						break;
+					}
+				}
+				
+				// This searches up the file, @todo as it will need to be handled in_pushReplaceLines()
+				/*if (!isset($files[$fname][$opid]['anchor']))
+				{
+					$files[$fname][$opid]['method'] = 'before';
+					for($i = $s; $i < sizeof($lines); $i++)
+					{
+						$cnt = substr_count($contents, trim($lines[$i]));
+						if ($cnt == 1)
+						{
+							$files[$fname][$opid]['anchor'] = $i;
+							break;
 						}
 					}
-
-					//@todo this reports on issues #1 and #2. Will need removing when fixed.
-					if ($files [$fname] [$opid]['method'] == 'replace' && abs($files [$fname] [$opid]['offset']) > 0) $this->fails[$fname][$opid] = $op['lines'];
+				}*/
+				if (!isset($files[$fname][$opid]['anchor'])) throw new Exception("Couldn't find anchor for: ". $opid ." in " . $fname);
+				
+				
+				// Set method as replace if needed, and pad operation $lines if anchor is further back in the file.
+				$lastadd = false;
+				foreach($op['change'] as $id => $change)
+				{
+					if ($change['operation'] == '+')
+					{
+						if ($lastadd !== FALSE && $lastadd < ($change['line']-1))
+						{
+							$files[$fname][$opid]['method'] = 'replace';
+							if ($files[$fname][$opid]['anchor'] - ($files[$fname][$opid]['start']-1) < 0)
+							{
+								$files = $this->_pushReplaceLines($files, $fname, $opid, $lines);
+							}
+							break;
+								
+						}
+						else $lastadd = $change['line'];
+					}
+					else if ($change['operation'] == '-')
+					{
+						$files[$fname][$opid]['method'] = 'replace';
+						if ($files[$fname][$opid]['anchor'] - ($files[$fname][$opid]['start']-1) < 0) 
+						{
+							$files = $this->_pushReplaceLines($files, $fname, $opid, $lines);
+						}
+						break;
+					}
 				}
+				//if ($files[$fname][$opid]['anchor'] - ($files[$fname][$opid]['start']-1) < 0 && $files[$fname][$opid]['method'] == 'replace') echo 'REPLACE ME';
+				//var_dump($files[$fname][$opid]['anchor'] - ($files[$fname][$opid]['start']-1), $fname, $files[$fname][$opid], trim($lines[$files[$fname][$opid]['anchor']]), '==============');
 			}
 		}
 		$this->patchArray = $files;
-		return true;
 	}
-	
 	/**
-	 * Get Find String From Patch
-	 * @param str $file Filename and path
-	 * @param array $lines Patch change lines
-	 * @param int $line Current line number for search
-	 * @param int $lnum Change location within file
-	 * @param string $searchUp Direction of search
-	 * @return array Find element
+	 * If the replace involves an offset, we need to add the lines that will be replaced.
+	 * @param array $files
+	 * @param string $fname
+	 * @param integer $opid
+	 * @param array $lines
 	 */
-	private function _getFind($file, $lines, $line, $lnum, $searchUp = FALSE)
+	private function _pushReplaceLines($files, $fname, $opid, $lines)
 	{
-		$find = array('method' => 'after', 'find' => NULL,'offset' => NULL);
-		$contents = @file_get_contents(ORIGINAL_LOCATION . $file);
-		if ($contents === FALSE) throw new Exception("Unable to open original file for _getFind(): " . ORIGINAL_LOCATION . $file);
-
-		// Do search if line is not empty
-		if (trim($lines[$line]) != '')
+		for($i = ($files[$fname][$opid]['start']-2); $i >= $files[$fname][$opid]['anchor']; $i--)
 		{
-			$ln = '';
-			if (strpos($lines[$line], '-') === 0)
-			{
-				$ln = trim(substr($lines[$line],1));
-			}
-			else $ln =  trim($lines[$line]);
-			$cnt = substr_count($contents, $ln);
-			if ($cnt == 1)
-			{
-				$find['find'] = $ln;
-				$find['offset'] = $line;
-				//var_dump('found', $find);
-				return $find;
-			}
+			// push to front of array
+			array_unshift($files[$fname][$opid]['lines'], rtrim($lines[$i]));
 		}
-
-		// Increment / Decrement search position
-		if ($searchUp) $line++;
-		else $line--;
-
-		// No more lines left, go to the file
-		if(!isset($lines[$line]))
-		{
-			$cont_lines = explode("\n",$contents);
-			//var_dump('not found in patch', $file, $lines);
-			$find = $this->_getFindByFile($contents, $cont_lines, $lnum+$line, $searchUp);
-			// Search in the other direction
-			if (!$find)
-			{
-				if (!$searchUp) return $this->_getFind($file, $lines, $line, $lnum, TRUE);
-				else throw new Exception("Unable to find unique anchor");
-
-			}
-			return $find;
-		}
-
-		return $this->_getFind($file, $lines, $line, $lnum);
-	}
-	
-	/**
-	 * If unique anchor cannot be found in _getFind, then search original file (within ORIGINAL_LOCATION)
-	 * @param str $contents File contents
-	 * @param array $cont_lines File contents as arry of lines
-	 * @param int $line current line
-	 * @param boolean $searchUp Search direction
-	 * @return array|boolean Find object|false if fail
-	 */
-	private function _getFindByFile($contents, $cont_lines, $line, $searchUp)
-	{
-		$find = array('method' => 'after', 'find' => NULL,'offset' => NULL);
-		if ($searchUp)
-		{
-			for($i = ($line+1); $i < sizeof($cont_lines); $i++)
-			{
-				$f = trim($cont_lines[$i]);
-				if ($f == '') continue;
-				$cnt = substr_count($contents, $f);
-				if ($cnt == 1)
-				{
-					//echo 'found on ' . $i . ': '.$f.'<br />';
-					$find['offset'] = ((int)$i-(int)$line);
-					$find['find'] = $f;
-					//var_dump('found in file', $i, $line, $find);
-					return $find;
-				}
-			}
-		}
-		else
-		{
-			for($i = ($line-1); $i > 0; $i--)
-			{
-				//var_dump($i);
-				$f = trim($cont_lines[$i]);
-				if ($f == '') continue;
-				$cnt = substr_count($contents, $f);
-				if ($cnt == 1)
-				{
-
-					//echo 'found on ' . $i . ': '.$f.'<br />';
-					$find['offset'] = ((int)$i-(int)$line);
-					$find['find'] = $f;
-					//var_dump('found in file', $i, $line, $find);
-					return $find;
-				}
-			}
-		}
-		return false;
+		return $files;
 	}
 }
