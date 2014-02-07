@@ -114,14 +114,18 @@ class SubVQModGenerator extends stdClass
 
 		// Add search element
 		$search = $op->addChild('search');
-		
-		//@todo make this work with complex operations
-		
 		$start = $operation['anchor'] - ($operation['start']-1);
+		$search->addCData(trim($operation['lines'][($start < 0 ? 0 : $start)]));
+		$search->addAttribute('position', $operation['method']);
+		
+		// Calculate offset
 		$offset = abs(($start+1) - $operation['change'][0]['line']);
 		if ($operation['method'] == 'replace') $offset--;
 		$add = array();
 		$remove = array();
+		
+		// Work out add snapshot
+		//@todo make this work with complex operations
 		foreach($operation['lines'] as $line => $l)
 		{
 			$found = false;
@@ -142,24 +146,27 @@ class SubVQModGenerator extends stdClass
 			if (!$found && $offset && $operation['method'] == 'replace' && $start == 0) $add[] = $operation['lines'][$line];
 				
 		}
+		// @todo no need for this once issues #1 and #2 are fixed.
 		if (sizeof($remove) > 1) $this->fails[] = $operation;
-		$offset += sizeof($remove)-1;
-		//var_dump($add);
-				
-		$search->addCData(trim($operation['lines'][($start < 0 ? 0 : $start)]));
-		$search->addAttribute('position', $operation['method']);
 		
+		$offset += sizeof($remove)-1;
+				
 		if (sizeof($operation['change']) > 0)
 		{
 			if ($offset) $search->addAttribute('offset', $offset);
 		}
 		
+		//Add add string
 		$search = $op->addChild('add');
 		$search->addCData(implode("\n", $add));
 		
 		return $op;
 	}
-	
+	/**
+	 * Parse all patch files in folder
+	 * @param unknown $folder
+	 * @return boolean
+	 */
 	public function parsePatches($folder)
 	{
 		if ($handle = opendir($folder)) 
@@ -172,7 +179,6 @@ class SubVQModGenerator extends stdClass
 			closedir($handle);
 		}
 		return true;
-		//var_dump($this->patchArray);
 	}
 
 	/**
@@ -204,7 +210,7 @@ class SubVQModGenerator extends stdClass
 				}
 				//substr($lines[$line],1));
 				
-				
+				// Store changes and lines from patch file
 				if (strpos ( $file, '+' ) === 0) {
 					$ops[$fnme][$opcnt]['change'][] = array('operation' => '+', 'line' => sizeof($ops[$fnme][$opcnt]['lines']));
 					$ops[$fnme][$opcnt]['lines'][] = rtrim(substr($file,1));
@@ -216,6 +222,7 @@ class SubVQModGenerator extends stdClass
 				else $ops[$fnme][$opcnt]['lines'][] = rtrim($file);
 				
 			}
+			
 			$this->_parseOperations($ops);
 			if (! feof ( $handle )) {
 				throw new exception("Error: unexpected fgets() fail");
@@ -224,6 +231,11 @@ class SubVQModGenerator extends stdClass
 		}
 		return true;
 	}
+	/**
+	 * Parse each operation in patch file
+	 * @param array $files Array of operations grouped by file
+	 * @throws Exception
+	 */
 	private function _parseOperations($files)
 	{
 		foreach($files as $fname => $ops)
@@ -234,13 +246,16 @@ class SubVQModGenerator extends stdClass
 			
 			foreach($ops as $opid => $op)
 			{
+				// By default we will be adding the change in after the anchor line
 				$files[$fname][$opid]['method'] = 'after';
 				
 				// Set start pos (position of first element (-1 for array find)
 				$s = $op['start']-1;
+				
 				// Incorporate line of first change
 				if (sizeof($op['change']) > 0) $s += ($op['change'][0]['operation'] == '-' ? $op['change'][0]['line'] : $op['change'][0]['line']-1); //@todo if add, start with line before.
 				
+				// Find a unique line in the file to use as an anchor
 				for($i = $s; $i > 0; $i--)
 				{
 					if (!trim($lines[$i])) continue;
@@ -297,8 +312,6 @@ class SubVQModGenerator extends stdClass
 						break;
 					}
 				}
-				//if ($files[$fname][$opid]['anchor'] - ($files[$fname][$opid]['start']-1) < 0 && $files[$fname][$opid]['method'] == 'replace') echo 'REPLACE ME';
-				//var_dump($files[$fname][$opid]['anchor'] - ($files[$fname][$opid]['start']-1), $fname, $files[$fname][$opid], trim($lines[$files[$fname][$opid]['anchor']]), '==============');
 			}
 		}
 		$this->patchArray = $files;
