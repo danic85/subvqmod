@@ -11,10 +11,8 @@ try
 {
 	// Create new SubVQMod Generator
 	$gen = new SubVQModGenerator();
-	
+	// Parse all files in folder
 	$gen->parsePatches('patch');
-	// Parse SVN patch file
-//	$gen->parsePatch(PATCH_LOCATION);
 	// Generate VQMod XML file
 	$ok = $gen->generateVQModXML();
 	
